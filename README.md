@@ -160,9 +160,3 @@ It does not:
 - Capture or record audio
 - Transmit audio outside the WoT voice system
 - Add a separate global microphone hotkey
-
-## License
-
-Choose a license appropriate for your project before distributing the source publicly.
-
-For open-source distribution, the MIT License is a simple option.
