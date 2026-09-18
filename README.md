@@ -156,6 +156,7 @@ Enable the microphone in a platoon, enter battle, then return to the garage
 without pressing PTT. Ask a platoon member to confirm that they still hear you.
 Repeat after dying and after battle completion. Check manual OFF and leaving
 the platoon, then test with the voice channel disabled. Local regression tests
-pass, but v1.4.3 still requires this live audio verification.
+pass. On 2026-09-18 the user confirmed v1.4.3 fixed the reported garage-return
+failure in their live test; the steps above remain the checklist for future changes.
 
 See `DIAGNOSIS.md` for the verified source revision and evidence limits.

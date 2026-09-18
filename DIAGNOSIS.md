@@ -61,5 +61,7 @@ entity clears the latch on the next tick, including after a missed leave event.
 The full mock suite and Python 2.7.18 compilation pass. The native call path
 alone already preserves the latch on v1.4.2; an extra invalidation hook is not
 justified. The readiness failure is reproduced locally and consistent with
-the live log, but actual live audio reproduction/verification was not performed.
-Use README's live verification steps before declaring the release proven.
+the live log. The developer did not perform a live audio test. On 2026-09-18,
+the user tested v1.4.3 and reported "this fixed it", confirming resolution of
+the reported garage-return failure in their scenario. Other modes and the full
+live checklist are not implied to have been verified by that report.

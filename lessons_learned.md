@@ -52,6 +52,31 @@ was not available; this file does not claim to reproduce its missing contents.
 36. Verify actual archive contents; prior completion messages are not sufficient.
 37. Keep only one installed mod version, including standalone res_mods copies.
 
+## Live-confirmed garage-return fix (1.4.3, 2026-09-18)
+
+The user tested v1.4.3 in the live client and reported: "this fixed it".
+This confirms the reported battle-to-garage microphone failure is resolved in
+their tested scenario. It does not establish that every mode or checklist case
+has been tested live.
+
+38. A persistent mic failure can start with a membership-readiness mistake,
+    even when it looks like a native mute problem. Clearing the logical latch
+    prevents later microphone self-healing from restoring capture.
+39. The successful fix was to preserve unknown membership until the prebattle
+    dispatcher and entity are active. Keep this distinction in future refactors;
+    do not collapse unknown into False or trust account GUI visibility alone.
+40. Native invalidation was a plausible suspect, but its call chain already
+    passed through the existing hook. Trace and test a hypothesis before adding
+    another hook; the readiness fix resolved this report without one.
+41. Preserve the failing-before/passing-after regression: native invalidation,
+    avatar non-player event, early account GUI, multiple ticks without a
+    dispatcher, inactive entity, and finally active platoon membership.
+42. Pair transition preservation with the opposite case: once an active entity
+    confirms no platoon, clear the latch even if the leave event was missed.
+43. Record user-confirmed live results separately from mock tests and source
+    analysis. A confirmed fix for this scenario is evidence, not blanket support
+    for every game mode or proof of every internal event in the live session.
+
 ## Release checklist
 
 - Run stock PTT, toggle, repeat key, key rebinding and missed key-up tests.

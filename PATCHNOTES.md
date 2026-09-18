@@ -16,7 +16,8 @@
   reconstructed engineering lessons; the later 65-lesson archive was unavailable.
 - Corrects the v1.4.2 claim below: account GUI visibility is not authoritative
   evidence that the garage platoon controller has finished initialization.
-- Regression tests and compilation pass; live audio verification remains pending.
+- Regression tests and compilation pass. On 2026-09-18 the user confirmed that
+  v1.4.3 fixed the reported battle-to-garage microphone failure in their live test.
 
 ## 1.4.2
 
