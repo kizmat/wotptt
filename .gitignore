@@ -1,0 +1,6 @@
+build/
+dist/*
+!dist/README.txt
+__pycache__/
+*.pyc
+build.local.json

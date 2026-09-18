@@ -1,0 +1,8 @@
+{
+  "id": "panda_toggle_platoon_ptt",
+  "version": "1.4.3",
+  "name": "Toggle Platoon PTT",
+  "description": "Reliable toggle-to-talk for the standard World of Tanks platoon voice path, with battle-transition persistence and microphone self-healing.",
+  "author": "Panda",
+  "website": "https://github.com/kizmat/wotptt"
+}

@@ -3,23 +3,31 @@
 from __future__ import absolute_import
 
 import logging
+
 import BigWorld
 import CommandMapping
 import GUI
 import VOIP
 
 from gui.prb_control import prb_getters
+from PlayerEvents import g_playerEvents
 from helpers import dependency
 from messenger.proto.bw_chat2.VOIPChatController import VOIPChatController
 from skeletons.gui.game_control import IPlatoonController
 
+
 MOD_ID = 'panda_toggle_platoon_ptt'
 MOD_NAME = 'Toggle Platoon PTT'
-MOD_VERSION = '1.3.0'
+MOD_VERSION = '1.4.3'
 SETTINGS_VERSION = 1
 
-WATCHDOG_SECONDS = 0.5
-OFF_DISPLAY_SECONDS = 3.0
+WATCHDOG_SECONDS = 1.0
+STATUS_DISPLAY_SECONDS = 3.0
+
+_BATTLE_LOBBY = 0
+_BATTLE_PENDING = 1
+_BATTLE_CONFIRMED = 2
+
 SETTINGS = {'enabled': True, 'showIndicator': True}
 
 _logger = logging.getLogger(MOD_ID)
@@ -29,21 +37,24 @@ _patched_set_mute = None
 
 
 def _apply_settings(values):
-    if isinstance(values, dict):
-        for key in ('enabled', 'showIndicator'):
-            if key in values:
-                SETTINGS[key] = bool(values[key])
+    if not isinstance(values, dict):
+        return
+    for key in ('enabled', 'showIndicator'):
+        if key in values:
+            SETTINGS[key] = bool(values[key])
 
 
 def _on_settings_changed(linkage, values):
     if linkage != MOD_ID:
         return
+
     was_enabled = SETTINGS['enabled']
     _apply_settings(values)
+
     if _manager is None:
         return
     if was_enabled and not SETTINGS['enabled']:
-        _manager.turn_off(show_status=True)
+        _manager.force_off(show_status=True)
     _manager.refresh_indicator()
 
 
@@ -68,7 +79,7 @@ def _register_settings():
                     SETTINGS['showIndicator'],
                     tooltip=(
                         '{HEADER}Microphone status{/HEADER}'
-                        '{BODY}ON stays visible. OFF disappears after 3 seconds.{/BODY}'
+                        '{BODY}ON and OFF disappear after 3 seconds.{/BODY}'
                     )
                 )
             ],
@@ -87,7 +98,7 @@ class TogglePTT(object):
         self.running = False
         self.latched = False
         self.key_down = False
-        self._was_in_platoon = False
+        self._battle_phase = _BATTLE_LOBBY
         self._watchdog_id = None
         self._unit_mgr = None
         self._indicator = None
@@ -99,36 +110,65 @@ class TogglePTT(object):
             return
         self.running = True
         VOIP.getVOIPManager().onJoinedChannel += self._on_joined_channel
+        g_playerEvents.onAvatarBecomePlayer += self._on_avatar_become_player
+        g_playerEvents.onAvatarBecomeNonPlayer += self._on_avatar_become_non_player
+        g_playerEvents.onAccountShowGUI += self._on_account_show_gui
 
     def stop(self):
         if not self.running:
             return
+
         self.running = False
         self._cancel_watchdog()
         if self.latched:
-            self.turn_off(show_status=False)
-        else:
-            self.key_down = False
-            self.hide_indicator()
-        self._unbind_unit_mgr()
+            self._set_mic(True)
+        self._clear_latch_state()
+        self.hide_indicator()
+
         try:
             VOIP.getVOIPManager().onJoinedChannel -= self._on_joined_channel
         except Exception:
             pass
+        player_events = (
+            (g_playerEvents.onAvatarBecomePlayer, self._on_avatar_become_player),
+            (g_playerEvents.onAvatarBecomeNonPlayer, self._on_avatar_become_non_player),
+            (g_playerEvents.onAccountShowGUI, self._on_account_show_gui),
+        )
+        for event, handler in player_events:
+            try:
+                event -= handler
+            except Exception:
+                pass
 
     @staticmethod
-    def in_platoon():
+    def _battle_squad_state():
+        """True/False in battle; None when there is no active battle avatar."""
         try:
             checker = getattr(BigWorld.player(), 'isPlayerInSquad', None)
             if callable(checker):
                 return bool(checker())
         except Exception:
             pass
+        return None
+
+    @staticmethod
+    def _lobby_platoon_state():
+        """True/False only with an active prebattle entity; None during loading."""
         try:
             controller = dependency.instance(IPlatoonController)
-            return bool(controller and controller.isInPlatoon())
+            if (controller is None or controller.prbDispatcher is None
+                    or controller.prbEntity is None
+                    or not controller.prbEntity.isActive()):
+                return None
+            return bool(controller.isInPlatoon())
         except Exception:
-            return False
+            return None
+
+    @classmethod
+    def _can_toggle_here(cls):
+        if cls._battle_squad_state() is True:
+            return True
+        return cls._lobby_platoon_state()
 
     @staticmethod
     def _ptt_down():
@@ -138,16 +178,18 @@ class TogglePTT(object):
         except Exception:
             return False
 
-    def _bind_current_unit_mgr(self):
+    def _bind_unit_mgr(self):
         try:
             manager = prb_getters.getClientUnitMgr()
         except Exception:
             manager = None
+
         if manager is self._unit_mgr:
             return
         self._unbind_unit_mgr()
         if manager is None:
             return
+
         try:
             manager.onUnitLeft += self._on_unit_left
             self._unit_mgr = manager
@@ -155,30 +197,50 @@ class TogglePTT(object):
             self._unit_mgr = None
 
     def _unbind_unit_mgr(self):
-        if self._unit_mgr is None:
+        manager = self._unit_mgr
+        self._unit_mgr = None
+        if manager is None:
             return
         try:
-            self._unit_mgr.onUnitLeft -= self._on_unit_left
+            manager.onUnitLeft -= self._on_unit_left
         except Exception:
             pass
-        self._unit_mgr = None
 
-    def _on_unit_left(self, unit_mgr_id, is_finished_assembling):
-        if self.latched and not is_finished_assembling:
-            self.turn_off(show_status=True)
+    def _on_unit_left(self, _, is_finished_assembling):
+        if is_finished_assembling:
+            # Lobby -> battle handoff. Arena squad data may report False until
+            # the battle data provider has finished populating.
+            self._battle_phase = _BATTLE_PENDING
+        elif self.latched:
+            self.force_off(show_status=True)
+
+    def _on_avatar_become_player(self):
+        if self.latched:
+            self._battle_phase = _BATTLE_PENDING
+            self._ensure_watchdog()
+
+    def _on_avatar_become_non_player(self):
+        if self.latched:
+            # Battle -> lobby handoff. Squad data can disappear before the
+            # lobby platoon controller is available again. Preserve the latch.
+            self._battle_phase = _BATTLE_PENDING
+            self._ensure_watchdog()
+
+    def _on_account_show_gui(self, *args, **kwargs):
+        if self.latched:
+            # Account.showGUI precedes prebattle dispatcher/entity setup.
+            # Switch phase now, but only an active entity may confirm a leave.
+            self._battle_phase = _BATTLE_LOBBY
+            self._bind_unit_mgr()
+            self._ensure_watchdog()
 
     def _on_joined_channel(self, *args, **kwargs):
         if not self.latched:
             return
         try:
-            BigWorld.callback(0.1, self._restore)
+            BigWorld.callback(0.1, self._keep_mic_open)
         except Exception:
-            self._restore()
-
-    def _restore(self):
-        if (self.running and SETTINGS['enabled'] and self.latched
-                and self.in_platoon() and self._set_mic(False)):
-            self.show_on_indicator()
+            self._keep_mic_open()
 
     def _ensure_watchdog(self):
         if (not self.running or self._watchdog_id is not None
@@ -190,94 +252,145 @@ class TogglePTT(object):
             self._watchdog_id = None
 
     def _cancel_watchdog(self):
-        if self._watchdog_id is None:
+        callback_id = self._watchdog_id
+        self._watchdog_id = None
+        if callback_id is None:
             return
         try:
-            BigWorld.cancelCallback(self._watchdog_id)
+            BigWorld.cancelCallback(callback_id)
         except Exception:
             pass
-        self._watchdog_id = None
 
     def _watchdog(self):
         self._watchdog_id = None
         if not self.running:
             return
+
         if self.latched:
-            self._bind_current_unit_mgr()
+            self._bind_unit_mgr()
+            battle_state = self._battle_squad_state()
 
-            in_platoon = self.in_platoon()
-            if in_platoon and not self._was_in_platoon:
-                self._restore()
-            self._was_in_platoon = in_platoon
-
-            try:
-                checker = getattr(BigWorld.player(), 'isPlayerInSquad', None)
-                if callable(checker) and not checker():
-                    self.turn_off(show_status=True)
+            if battle_state is True:
+                self._battle_phase = _BATTLE_CONFIRMED
+            elif battle_state is False:
+                if self._battle_phase == _BATTLE_CONFIRMED:
+                    # Do not mistake avatar replacement at battle end for a
+                    # real dynamic-platoon leave.
+                    if getattr(g_playerEvents, 'isPlayerEntityChanging', False):
+                        self._battle_phase = _BATTLE_PENDING
+                    else:
+                        self.force_off(show_status=True)
+                        return
+                # False while PENDING is normal during battle loading/teardown.
+            else:
+                lobby_state = self._lobby_platoon_state()
+                if lobby_state:
+                    self._battle_phase = _BATTLE_LOBBY
+                elif lobby_state is False and self._battle_phase == _BATTLE_LOBBY:
+                    # Fallback if a lobby unit-leave event was missed.
+                    self.force_off(show_status=True)
                     return
-            except Exception:
-                pass
+                # PENDING/CONFIRMED + no lobby yet is a normal transition.
+
+            self._keep_mic_open()
+
+        # Recover from a missed key-up or a binding change while the key is held.
         if self.key_down and not self._ptt_down():
             self.key_down = False
+
         self._ensure_watchdog()
 
     @staticmethod
     def _set_mic(muted):
         try:
             manager = VOIP.getVOIPManager()
-            if not muted and (not manager.getCurrentChannel() or manager.isInTesting()):
-                return False
+            if not muted:
+                if (not manager.isInitialized() or not manager.isEnabled()
+                        or not manager.getCurrentChannel()
+                        or not manager.isCurrentChannelEnabled()
+                        or manager.isInTesting()):
+                    return False
             manager.setMicMute(muted=muted)
             return True
         except Exception:
             return False
 
-    @staticmethod
-    def _apply_latch(controller, original, muted):
-        return original(controller, muted, bool(muted))
+    def _keep_mic_open(self):
+        if self.running and SETTINGS['enabled'] and self.latched:
+            self._set_mic(False)
+
+    def _clear_latch_state(self):
+        self.latched = False
+        self.key_down = False
+        self._battle_phase = _BATTLE_LOBBY
+        self._unbind_unit_mgr()
+
+    def _manual_toggle(self, controller, original):
+        if self.latched:
+            self.latched = False
+            self._battle_phase = _BATTLE_LOBBY
+            self._unbind_unit_mgr()
+            result = original(controller, True, True)
+            self.show_off_indicator()
+            return result
+
+        self.latched = True
+        self._battle_phase = (_BATTLE_CONFIRMED if self._battle_squad_state() is True
+                              else _BATTLE_LOBBY)
+        self._bind_unit_mgr()
+        self._ensure_watchdog()
+        result = original(controller, False, False)
+        self.show_on_indicator()
+        return result
 
     def handle_mute(self, controller, is_muted, force, original):
-        if not SETTINGS['enabled'] or not self.in_platoon():
+        if not SETTINGS['enabled']:
             self.key_down = self._ptt_down()
+            if not self.key_down:
+                self._cancel_watchdog()
+            return original(controller, is_muted, force)
+
+        # Once ON, preserve the latch through lobby/battle transition gaps.
+        # Current platoon membership is required only to start a new latch.
+        if not self.latched and not self._can_toggle_here():
+            self.key_down = self._ptt_down()
+            if not self.key_down:
+                self._cancel_watchdog()
             return original(controller, is_muted, force)
 
         physical_down = self._ptt_down()
 
+        # Native PTT press edge: WoT asks to unmute while the key is down.
         if physical_down and not self.key_down and not is_muted:
             self.key_down = True
-            self.latched = not self.latched
-            if self.latched:
-                self._was_in_platoon = True
-                self._bind_current_unit_mgr()
             self._ensure_watchdog()
-            result = self._apply_latch(controller, original, not self.latched)
-            if self.latched:
-                self.show_on_indicator()
-            else:
-                self.show_off_indicator()
-            return result
+            return self._manual_toggle(controller, original)
 
         if physical_down:
             self.key_down = True
             self._ensure_watchdog()
-            return self._apply_latch(controller, original, not self.latched)
+            return original(controller, not self.latched, not self.latched)
 
         if self.key_down:
             self.key_down = False
-            return self._apply_latch(controller, original, not self.latched)
+            result = original(controller, not self.latched, not self.latched)
+            if not self.latched:
+                self._cancel_watchdog()
+            return result
 
+        # Incidental native mute requests cannot cancel an ON latch.
         if self.latched:
-            return self._apply_latch(controller, original, False)
+            return original(controller, False, False)
 
         return original(controller, is_muted, force)
 
-    def turn_off(self, show_status):
+    def force_off(self, show_status):
         was_on = self.latched
-        self.latched = False
-        self.key_down = False
-        self._was_in_platoon = False
         if was_on:
             self._set_mic(True)
+        self._clear_latch_state()
+        self._cancel_watchdog()
+
         if show_status and was_on:
             self.show_off_indicator()
         else:
@@ -308,14 +421,15 @@ class TogglePTT(object):
             _logger.exception('Could not create microphone indicator.')
             return False
 
-    def _show_indicator(self, text, colour):
+    def _show_indicator(self, label, colour):
         if not SETTINGS['showIndicator']:
             self.hide_indicator()
             return
         if self._indicator is None and not self._create_indicator():
             return
+
         try:
-            self._indicator.text = text
+            self._indicator.text = label
             self._indicator.colour = colour
             if not self._indicator_added:
                 GUI.addRoot(self._indicator)
@@ -323,42 +437,31 @@ class TogglePTT(object):
         except Exception:
             _logger.exception('Could not display microphone indicator.')
 
-    def show_on_indicator(self):
+    def _show_status(self, label, colour):
         self._indicator_token += 1
         token = self._indicator_token
-
-        self._show_indicator(
-            'PLATOON MIC: ON',
-            (128, 255, 128, 255)
-        )
+        self._show_indicator(label, colour)
 
         def hide():
-            if token == self._indicator_token and self.latched:
+            if token == self._indicator_token:
                 self.hide_indicator()
 
         try:
-            BigWorld.callback(OFF_DISPLAY_SECONDS, hide)
+            BigWorld.callback(STATUS_DISPLAY_SECONDS, hide)
         except Exception:
             pass
+
+    def show_on_indicator(self):
+        self._show_status('PLATOON MIC: ON', (128, 255, 128, 255))
 
     def show_off_indicator(self):
-        self._indicator_token += 1
-        token = self._indicator_token
-        self._show_indicator('PLATOON MIC: OFF', (255, 190, 120, 255))
-
-        def hide():
-            if token == self._indicator_token and not self.latched:
-                self.hide_indicator()
-
-        try:
-            BigWorld.callback(OFF_DISPLAY_SECONDS, hide)
-        except Exception:
-            pass
+        self._show_status('PLATOON MIC: OFF', (255, 190, 120, 255))
 
     def hide_indicator(self):
         self._indicator_token += 1
         if self._indicator is None or not self._indicator_added:
             return
+
         try:
             GUI.delRoot(self._indicator)
         except Exception:
@@ -414,6 +517,7 @@ def init():
         _remove_hook()
         _manager = None
         return
+
     _logger.info('%s v%s started.', MOD_NAME, MOD_VERSION)
 
 
@@ -421,6 +525,7 @@ def fini():
     global _manager
     manager = _manager
     _manager = None
+
     if manager is not None:
         try:
             manager.stop()
