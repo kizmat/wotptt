@@ -1,162 +1,162 @@
-# Toggle Platoon PTT
+# Toggle Platoon PTT v1.4.3
 
-A lightweight World of Tanks mod that changes platoon voice chat Push-to-Talk into a toggle.
+## Project files
 
-Instead of holding the Push-to-Talk key while speaking:
+- `src/mod_toggle_ptt.py` - mod source
+- `tests/test_toggle_ptt.py` - local mock-runtime regression tests
+- `build.py` - compiler/packager
+- `build.bat` - one-click Windows build
+- `build_install.bat` - build + copy into WoT
+- `clean.bat` - remove generated build output
+- `test.bat` - run mock tests
+- `mod.json` - package metadata
+- `build.local.example.json` - example local WoT install configuration
+- `GOALS.md` - behavioral requirements
+- `PATCHNOTES.md` - version history
+- `lessons_learned.md` - engineering safeguards
+- `DIAGNOSIS.md` - teardown trace and validation limits
 
-- Press once to turn the microphone ON
-- Press again to turn the microphone OFF
+## Requirements
 
-The mod automatically uses the Push-to-Talk key configured in World of Tanks.
+### To build the actual `.wotmod`
 
-## Features
+World of Tanks production mods use Python 2.7 bytecode.
 
-- Uses your existing World of Tanks Push-to-Talk key
-- No additional hotkey required
-- Works while you are in a platoon
-- First press toggles the microphone ON
-- Second press toggles the microphone OFF
-- Microphone stays open after releasing the PTT key
-- `PLATOON MIC: ON` appears for 3 seconds
-- `PLATOON MIC: OFF` appears for 3 seconds
-- Leaving or disbanding the platoon automatically turns the microphone OFF
-- Voice channel reconnects restore the active toggle state
-- Outside a platoon, normal World of Tanks Push-to-Talk behavior is preserved
+Install **Python 2.7.18** and either:
 
-## Installation
+1. make it available through the Windows Python launcher as `py -2.7`; or
+2. install it at `C:\Python27\python.exe`; or
+3. set:
 
-### Recommended: `.wotmod`
+```bat
+set PYTHON27=C:\path\to\python.exe
+```
 
-Download:
+No pip packages are required.
 
-    panda.toggle_ptt_1.3.0.wotmod
+### To run the mock tests
 
-Copy it to:
+Python 3 is recommended.
 
-    World of Tanks/
-    └── mods/
-        └── <game-version>/
-            └── panda.toggle_ptt_1.3.0.wotmod
+## Build
 
-For example:
+Double-click:
 
-    World of Tanks/
-    └── mods/
-        └── 2.4.0.0/
-            └── panda.toggle_ptt_1.3.0.wotmod
+```text
+build.bat
+```
 
-Restart World of Tanks after installing the mod.
+or run:
 
-## Usage
+```bat
+build.bat
+```
 
-1. Enable voice chat in World of Tanks.
-2. Configure your normal Push-to-Talk key in the WoT settings.
-3. Create or join a platoon.
-4. Press your normal Push-to-Talk key once.
+Output:
 
-The game will display:
+```text
+dist\panda_toggle_platoon_ptt_1.4.3.wotmod
+```
 
-    PLATOON MIC: ON
+The generated `.wotmod` contains:
 
-Your microphone will remain active after releasing the key.
+```text
+meta.xml
+res/
+└── scripts/
+    └── client/
+        └── gui/
+            └── mods/
+                └── mod_toggle_ptt.pyc
+```
 
-Press the same key again to mute:
+## Manual installation
 
-    PLATOON MIC: OFF
+Copy the generated `.wotmod` into:
 
-Both status messages disappear automatically after approximately 3 seconds.
+```text
+<World of Tanks>\mods\<CURRENT_GAME_VERSION>\
+```
 
-## Outside a Platoon
+Use the exact current version folder already present under the game's `mods`
+directory.
 
-The mod only changes Push-to-Talk behavior while you are in a platoon.
+## Automatic build + install
 
-Outside a platoon, the configured Push-to-Talk key continues to work normally:
+1. Copy:
 
-    Hold key   → Microphone ON
-    Release key → Microphone OFF
+```text
+build.local.example.json
+```
 
-## Leaving a Platoon
+to:
 
-If you:
+```text
+build.local.json
+```
 
-- Leave the platoon
-- Are removed from the platoon
-- Disband the platoon
-
-the mod automatically clears the toggle and mutes the microphone.
-
-This prevents the microphone from accidentally remaining open.
-
-## Changing the PTT Key
-
-No mod configuration is required.
-
-Simply change the Push-to-Talk key from the normal World of Tanks controls menu.
-
-The mod reads the currently configured WoT PTT binding.
-
-## Compatibility
-
-Designed for:
-
-- World of Tanks PC
-- WoT 2.4.x client family
-- Python 2.7 WoT mod environment
-
-Game updates may change internal APIs and require an updated version of the mod.
-
-## Manual / Development Installation
-
-For development, the compiled Python module can also be installed directly:
-
-    World of Tanks/
-    └── res_mods/
-        └── <game-version>/
-            └── scripts/
-                └── client/
-                    └── gui/
-                        └── mods/
-                            └── mod_toggle_ptt.pyc
-
-The Python module must be named:
-
-    mod_toggle_ptt.pyc
-
-Do not include version numbers containing dots in the Python module filename.
-
-For example, do not use:
-
-    mod_toggle_ptt_v1.3.0.pyc
-
-## Building
-
-World of Tanks currently uses Python 2.7 bytecode for this mod environment.
+2. Edit `build.local.json`.
 
 Example:
 
-    C:\Python27\python.exe -m py_compile mod_toggle_ptt.py
+```json
+{
+  "game_dir": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\World of Tanks",
+  "game_version": "2.4.0.0"
+}
+```
 
-The resulting file should be packaged inside the `.wotmod` as:
+Use the version folder that exists on your machine; do not assume the example
+version is still current.
 
-    res/scripts/client/gui/mods/mod_toggle_ptt.pyc
+3. Run:
 
-A `.wotmod` should contain:
+```text
+build_install.bat
+```
 
-    meta.xml
-    res/
-        scripts/
-            client/
-                gui/
-                    mods/
-                        mod_toggle_ptt.pyc
+## Tests
 
-## Notes
+Run:
 
-This mod modifies only the World of Tanks voice-chat behavior.
+```text
+test.bat
+```
 
-It does not:
+The tests cover normal PTT, toggle behavior, key rebinding, platoon transitions,
+VOIP reconnects, silent microphone failure/self-healing, intentionally disabled
+voice channels, settings changes, HUD failures, shutdown cleanup, and hook
+coexistence.
 
-- Modify Windows microphone settings
-- Capture or record audio
-- Transmit audio outside the WoT voice system
-- Add a separate global microphone hotkey
+## Settings panel
+
+The core mod has no required third-party dependency.
+
+If `ModsSettingsAPI` / a compatible Aslain settings API is already installed,
+the mod exposes its settings panel there. Without that API, the mod still works
+with its defaults:
+
+- enabled: ON
+- microphone indicator: ON
+
+## Install the included build
+
+The developer ZIP includes the compiled Python 2.7.18 package in `dist/`.
+Exit WoT, remove older Toggle Platoon PTT packages from the active `mods/<version>/`
+folder, and copy `dist/panda_toggle_platoon_ptt_1.4.3.wotmod` there. Also remove
+any older standalone `mod_toggle_ptt.pyc` installation under `res_mods` to avoid
+loading two versions. Restart WoT. The startup log should report v1.4.3.
+
+For a Steam installation, use the regional game directory (for example,
+`World of Tanks/eu`), containing `version.xml` and `mods`.
+
+## Live verification
+
+Enable the microphone in a platoon, enter battle, then return to the garage
+without pressing PTT. Ask a platoon member to confirm that they still hear you.
+Repeat after dying and after battle completion. Check manual OFF and leaving
+the platoon, then test with the voice channel disabled. Local regression tests
+pass. On 2026-09-18 the user confirmed v1.4.3 fixed the reported garage-return
+failure in their live test; the steps above remain the checklist for future changes.
+
+See `DIAGNOSIS.md` for the verified source revision and evidence limits.
